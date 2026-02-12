@@ -1,0 +1,1041 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Crown, Shield, Hexagon, RefreshCcw, User, Cpu, Play, Heart, ArrowUp, Skull, HelpCircle, X, Trophy, LogOut, RotateCcw, Volume2, VolumeX, Eye, EyeOff } from 'lucide-react';
+
+// --- DEFINICIÓ DE PECES I CONSTANTS ---
+
+const ROWS = 7;
+const COLS = 5;
+const WINS_TO_MATCH = 5;
+
+// Patró de fons per als Palaus (Geomètric/Damasc subtil)
+const PALACE_PATTERN = {
+  backgroundImage: `url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M10 0l10 10-10 10L0 10z' fill='%23000000' fill-opacity='0.1' fill-rule='evenodd'/%3E%3C/svg%3E")`
+};
+
+// Sons (URLs d'exemple estables)
+const SOUNDS = {
+  MOVE: 'https://cdn.freesound.org/previews/675/675905_13994793-lq.mp3', // Click suau
+  CAPTURE: 'https://cdn.freesound.org/previews/566/566436_10247858-lq.mp3', // Cop sec
+  WIN: 'https://cdn.freesound.org/previews/270/270404_5123851-lq.mp3', // Èxit
+  LOSE: 'https://cdn.freesound.org/previews/76/76376_877451-lq.mp3', // Fracàs
+  START: 'https://cdn.freesound.org/previews/320/320673_5260872-lq.mp3' // Inici
+};
+
+const PIECE_COLORS = {
+  CANDIDATE: 'text-orange-500', 
+  LADY: 'text-red-500',
+  SOLDIER: 'text-blue-500',
+  COUNSELOR: 'text-purple-500',
+  NOBLE: 'text-emerald-500',
+};
+
+const TYPES = {
+  CANDIDATE: { id: 'CANDIDATE', name: 'Candidat', icon: Crown, value: 1000 },
+  LADY: { id: 'LADY', name: 'Dama', icon: Heart, value: 500 },
+  SOLDIER: { id: 'SOLDIER', name: 'Soldat', icon: ArrowUp, value: 40 },
+  COUNSELOR: { id: 'COUNSELOR', name: 'Conseller', icon: Hexagon, value: 30 },
+  NOBLE: { id: 'NOBLE', name: 'Noble', icon: Shield, value: 30 }
+};
+
+const BASE_ARMY = [
+  TYPES.CANDIDATE,
+  TYPES.LADY, TYPES.LADY,
+  TYPES.SOLDIER,
+  TYPES.COUNSELOR, TYPES.COUNSELOR, TYPES.COUNSELOR,
+  TYPES.NOBLE, TYPES.NOBLE, TYPES.NOBLE
+];
+
+// Utilitats
+const cloneBoard = (board) => board.map(row => row.map(cell => (cell ? { ...cell } : null)));
+
+const getValidMoves = (board, r, c, piece) => {
+  const moves = [];
+  if (!piece) return moves;
+
+  const isPlayer1 = piece.player === 0; 
+  const forwardDir = isPlayer1 ? -1 : 1; 
+  const goalRow = isPlayer1 ? 0 : ROWS - 1;
+
+  if (piece.type.id === 'SOLDIER' && r === goalRow) return [];
+
+  // --- LÒGICA SOLDAT (Llisca) ---
+  if (piece.type.id === 'SOLDIER') {
+    let currentR = r;
+    while (true) {
+      const nextR = currentR + forwardDir;
+      if (nextR < 0 || nextR >= ROWS) break; 
+
+      const target = board[nextR][c];
+      if (target === null) {
+        currentR = nextR;
+        if (currentR === goalRow) {
+          moves.push({ r: currentR, c: c });
+          break;
+        }
+      } else {
+        if (target.player !== piece.player) {
+          moves.push({ r: nextR, c: c, isCapture: true });
+        } else {
+          if (currentR !== r) moves.push({ r: currentR, c: c });
+        }
+        break;
+      }
+    }
+    return moves;
+  }
+
+  // --- ALTRES PECES ---
+  const directions = [];
+  if (piece.type.id === 'CANDIDATE' || piece.type.id === 'LADY') {
+    [[-1,-1], [-1,0], [-1,1], [0,-1], [0,1], [1,-1], [1,0], [1,1]].forEach(([dr, dc]) => directions.push({dr, dc, max: 1}));
+  } else if (piece.type.id === 'NOBLE') {
+    [[-1,0], [1,0], [0,-1], [0,1]].forEach(([dr, dc]) => directions.push({dr, dc, max: 1}));
+  } else if (piece.type.id === 'COUNSELOR') {
+    [[-1,-1], [-1,1], [1,-1], [1,1]].forEach(([dr, dc]) => directions.push({dr, dc, max: 1}));
+  } 
+
+  directions.forEach(({dr, dc, max}) => {
+    for (let k = 1; k <= max; k++) {
+      const nr = r + (dr * k);
+      const nc = c + (dc * k);
+
+      if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
+        const target = board[nr][nc];
+        if (target === null) {
+          moves.push({ r: nr, c: nc });
+        } else {
+          if (target.player !== piece.player) {
+            if (piece.type.id !== 'LADY') {
+              moves.push({ r: nr, c: nc, isCapture: true });
+            }
+          }
+          break; 
+        }
+      } else {
+        break; 
+      }
+    }
+  });
+
+  return moves;
+};
+
+// --- COMPONENTS AUXILIARS ---
+
+const NameInputModal = ({ onStart }) => {
+  const [name, setName] = useState("");
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (name.trim()) {
+      onStart(name);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+      <div className="bg-slate-800 border-2 border-orange-500 rounded-lg max-w-md w-full p-8 shadow-2xl text-center">
+        <h2 className="text-3xl font-bold text-orange-500 mb-6 flex justify-center gap-2">
+          <Crown /> VOLTO DIGITAL
+        </h2>
+        <p className="text-slate-300 mb-6">Benvingut a l'arena. Introdueix el teu nom per començar el partit.</p>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <input 
+            type="text" 
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Nom del Jugador" 
+            className="w-full p-3 rounded bg-slate-900 border border-slate-700 text-white focus:border-orange-500 outline-none text-center text-lg"
+            autoFocus
+          />
+          <button 
+            type="submit" 
+            disabled={!name.trim()}
+            className="w-full py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold rounded transition-colors"
+          >
+            COMENÇAR MATCH
+          </button>
+        </form>
+        <p className="mt-4 text-xs text-slate-500">El primer a arribar a {WINS_TO_MATCH} victòries guanya.</p>
+      </div>
+    </div>
+  );
+};
+
+const InstructionsModal = ({ onClose }) => (
+  <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="bg-slate-900 border-2 border-slate-700 rounded-lg max-w-lg w-full max-h-[90vh] overflow-y-auto relative shadow-2xl">
+      <button 
+        onClick={onClose}
+        className="absolute top-4 right-4 text-slate-400 hover:text-white"
+      >
+        <X size={24} />
+      </button>
+      
+      <div className="p-6 space-y-6 text-slate-200">
+        <h2 className="text-2xl font-bold text-orange-500 flex items-center gap-2">
+          <HelpCircle /> Instruccions de Volto
+        </h2>
+
+        <section>
+          <h3 className="font-bold text-lg mb-2 text-slate-100 border-b border-slate-700 pb-1">Objectiu</h3>
+          <p className="text-sm text-slate-400">
+            Una batalla d'estratègia oculta. No coneixes la identitat de les peces rivals fins que es mouen o actuen.
+          </p>
+        </section>
+
+        <section>
+          <h3 className="font-bold text-lg mb-2 text-slate-100 border-b border-slate-700 pb-1">Moviments</h3>
+          <div className="grid grid-cols-1 gap-3 text-sm">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-slate-800 rounded border border-slate-700"><Crown size={20} className={PIECE_COLORS.CANDIDATE}/></div>
+              <div>
+                <span className={`font-bold block ${PIECE_COLORS.CANDIDATE}`}>Candidat</span>
+                1 pas en qualsevol direcció.
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-slate-800 rounded border border-slate-700"><Heart size={20} className={PIECE_COLORS.LADY}/></div>
+              <div>
+                <span className={`font-bold block ${PIECE_COLORS.LADY}`}>Dama</span>
+                1 pas qualsevol direcció. <span className="text-red-300 font-bold">NO captura.</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-slate-800 rounded border border-slate-700"><ArrowUp size={20} className={PIECE_COLORS.SOLDIER}/></div>
+              <div>
+                <span className={`font-bold block ${PIECE_COLORS.SOLDIER}`}>Soldat</span>
+                Només endavant. Avança fins xocar o arribar al final.
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-slate-800 rounded border border-slate-700"><Hexagon size={20} className={PIECE_COLORS.COUNSELOR}/></div>
+              <div>
+                <span className={`font-bold block ${PIECE_COLORS.COUNSELOR}`}>Conseller</span>
+                1 pas en diagonal.
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-slate-800 rounded border border-slate-700"><Shield size={20} className={PIECE_COLORS.NOBLE}/></div>
+              <div>
+                <span className={`font-bold block ${PIECE_COLORS.NOBLE}`}>Noble</span>
+                1 pas en creu (ortogonal).
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h3 className="font-bold text-lg mb-2 text-green-400 border-b border-slate-700 pb-1">3 Maneres de Guanyar</h3>
+          <ul className="list-disc pl-5 space-y-2 text-sm text-slate-300">
+            <li>
+              <span className="text-orange-400 font-bold">Captura Reial:</span> Elimina el <Crown size={14} className="inline"/> Candidat enemic.
+            </li>
+            <li>
+              <span className="text-orange-400 font-bold">Coronació:</span> Porta el teu <Crown size={14} className="inline"/> Candidat a l'última fila (Palau rival).
+            </li>
+            <li>
+              <span className="text-red-400 font-bold">Sacrifici de Dames:</span> Si perds les teves 2 <Heart size={14} className="inline"/> Dames, GUANYES automàticament.
+            </li>
+          </ul>
+        </section>
+
+        <button 
+          onClick={onClose}
+          className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold transition-colors"
+        >
+          Entesos!
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
+// --- COMPONENT PUNTS DE MOVIMENT ---
+const MovementDots = ({ type, colorClass, player }) => {
+  let dotStyleClass = colorClass.replace('text-', 'bg-');
+  
+  if (type.id === 'LADY') {
+      const borderClass = colorClass.replace('text-', 'border-');
+      dotStyleClass = `bg-transparent border ${borderClass}`;
+  }
+
+  const dots = [];
+  const baseStyle = `absolute w-1.5 h-1.5 rounded-full ${dotStyleClass} shadow-sm`;
+
+  const p = (pos) => <div key={dots.length} className={`${baseStyle} ${pos}`}></div>;
+
+  if (type.id === 'CANDIDATE' || type.id === 'LADY') {
+    dots.push(p('top-1.5 left-1.5')); 
+    dots.push(p('top-1.5 left-1/2 -translate-x-1/2')); 
+    dots.push(p('top-1.5 right-1.5')); 
+    dots.push(p('top-1/2 right-1 -translate-y-1/2')); 
+    dots.push(p('bottom-1.5 right-1.5')); 
+    dots.push(p('bottom-1.5 left-1/2 -translate-x-1/2')); 
+    dots.push(p('bottom-1.5 left-1.5')); 
+    dots.push(p('top-1/2 left-1 -translate-y-1/2')); 
+  } 
+  else if (type.id === 'COUNSELOR') {
+    dots.push(p('top-1.5 left-1.5'));
+    dots.push(p('top-1.5 right-1.5'));
+    dots.push(p('bottom-1.5 right-1.5'));
+    dots.push(p('bottom-1.5 left-1.5'));
+  } 
+  else if (type.id === 'NOBLE') {
+    dots.push(p('top-1.5 left-1/2 -translate-x-1/2')); 
+    dots.push(p('top-1/2 right-1 -translate-y-1/2')); 
+    dots.push(p('bottom-1.5 left-1/2 -translate-x-1/2')); 
+    dots.push(p('top-1/2 left-1 -translate-y-1/2')); 
+  }
+  else if (type.id === 'SOLDIER') {
+    if (player === 0) {
+        dots.push(p('top-1.5 left-1/2 -translate-x-1/2'));
+    } else {
+        dots.push(p('bottom-1.5 left-1/2 -translate-x-1/2'));
+    }
+  }
+
+  return <>{dots}</>;
+};
+
+// --- COMPONENT MARCADOR ---
+const Scoreboard = ({ scores, playerName }) => (
+  <div className="bg-slate-900 p-2 rounded border border-slate-800 flex flex-col gap-2 min-h-[80px]">
+    <h4 className="text-xs font-bold text-amber-400 uppercase flex items-center gap-2 border-b border-slate-800 pb-1">
+        <Trophy size={14} /> Marcador ({WINS_TO_MATCH} victòries)
+    </h4>
+    <div className="space-y-2 text-xs">
+        <div className="flex justify-between items-center">
+            <span className="text-slate-300 font-bold">{playerName}</span>
+            <div className="flex gap-1 bg-slate-800 px-2 py-1 rounded h-6 items-center min-w-[60px] justify-end">
+                {[...Array(scores.player)].map((_, i) => <Crown key={i} size={12} className="text-amber-500 fill-amber-500"/>)}
+            </div>
+        </div>
+        <div className="flex justify-between items-center">
+            <span className="text-slate-300 font-bold">CPU</span>
+            <div className="flex gap-1 bg-slate-800 px-2 py-1 rounded h-6 items-center min-w-[60px] justify-end">
+                {[...Array(scores.cpu)].map((_, i) => <Crown key={i} size={12} className="text-red-500 fill-red-500"/>)}
+            </div>
+        </div>
+    </div>
+  </div>
+);
+
+// --- COMPONENT GRAVEYARD ---
+const Graveyard = ({ pieces, label }) => (
+    <div className="bg-slate-900 p-2 rounded border border-slate-800 flex flex-col gap-2 min-h-[80px]">
+        <h4 className="text-xs font-bold text-slate-400 uppercase">{label}</h4>
+        <div className="flex flex-wrap gap-1">
+            {pieces.length === 0 && <span className="text-xs text-slate-600 italic">Cap baixa</span>}
+            {pieces.map((p, i) => (
+                <div key={i} className={`w-8 h-8 rounded flex items-center justify-center border shadow-sm ${p.player === 0 ? 'bg-amber-100 border-amber-400 text-amber-900' : 'bg-rose-200 border-rose-400 text-rose-900'}`} title={p.type.name}>
+                    <p.type.icon size={18} className={`${PIECE_COLORS[p.type.id]} ${p.type.id === 'SOLDIER' && p.player === 1 ? 'rotate-180' : ''}`} />
+                </div>
+            ))}
+        </div>
+    </div>
+);
+
+export default function VoltoGame() {
+  const [board, setBoard] = useState([]);
+  const [phase, setPhase] = useState('name'); 
+  const [turn, setTurn] = useState(0); 
+  const [selectedPos, setSelectedPos] = useState(null);
+  const [validMoves, setValidMoves] = useState([]);
+  const [winner, setWinner] = useState(null);
+  const [winReason, setWinReason] = useState("");
+  const [showRules, setShowRules] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true); 
+  
+  const [history, setHistory] = useState([]);
+
+  const [playerName, setPlayerName] = useState("Jugador");
+  const [scores, setScores] = useState({ player: 0, cpu: 0 });
+  const [lastMove, setLastMove] = useState(null);
+  const [cpuStrategy, setCpuStrategy] = useState(null); 
+  const [animatingMove, setAnimatingMove] = useState(null);
+  const [eliminated, setEliminated] = useState({ 0: [], 1: [] });
+  const [cpuLastMoveInfo, setCpuLastMoveInfo] = useState(null);
+  
+  // ESTAT DE MOVIMENTS OBSERVATS { [id]: ['ortho', 'diag', 'soldier', 'captured'] }
+  const [observedMoves, setObservedMoves] = useState({});
+
+  const p0LadiesLost = eliminated[0].filter(p => p.type.id === 'LADY').length;
+  const p1LadiesLost = eliminated[1].filter(p => p.type.id === 'LADY').length;
+
+  const playSound = (type) => {
+    if (!soundEnabled) return;
+    const audio = new Audio(SOUNDS[type]);
+    audio.volume = 0.5;
+    audio.play().catch(e => console.log("Audio play failed", e));
+  };
+
+  const resetApp = () => {
+    setScores({ player: 0, cpu: 0 });
+    setPlayerName("Jugador");
+    setPhase('name');
+  };
+
+  const startNewRound = () => {
+    playSound('START');
+    const newBoard = Array(ROWS).fill(null).map(() => Array(COLS).fill(null));
+    const cpuArmy = [...BASE_ARMY].sort(() => Math.random() - 0.5);
+    const playerArmy = [...BASE_ARMY].sort(() => Math.random() - 0.5);
+
+    const strategies = ['CAPTURE', 'CORONATION', 'SACRIFICE'];
+    const chosenStrategy = strategies[Math.floor(Math.random() * strategies.length)];
+    setCpuStrategy(chosenStrategy);
+
+    let cpuIdx = 0;
+    for (let r = 0; r <= 1; r++) {
+      for (let c = 0; c < COLS; c++) {
+        newBoard[r][c] = { player: 1, type: cpuArmy[cpuIdx], revealed: false, id: `cpu_${cpuIdx}` };
+        cpuIdx++;
+      }
+    }
+    let p1Idx = 0;
+    for (let r = ROWS - 2; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        newBoard[r][c] = { player: 0, type: playerArmy[p1Idx], revealed: true, id: `p1_${p1Idx}` };
+        p1Idx++;
+      }
+    }
+
+    setBoard(newBoard);
+    setEliminated({ 0: [], 1: [] });
+    setPhase('setup');
+    setWinner(null);
+    setWinReason("");
+    setAnimatingMove(null);
+    setCpuLastMoveInfo(null);
+    setObservedMoves({});
+    setLastMove(null); 
+    setHistory([]); 
+  };
+
+  const handleNameSubmit = (name) => {
+    setPlayerName(name);
+    startNewRound();
+  };
+
+  const handleUndo = () => {
+    if (history.length === 0 || phase !== 'playing' || turn === 1) return;
+    const previousState = history[history.length - 1];
+    setBoard(previousState.board);
+    setTurn(previousState.turn);
+    setEliminated(previousState.eliminated);
+    setLastMove(previousState.lastMove);
+    setCpuLastMoveInfo(previousState.cpuLastMoveInfo);
+    setObservedMoves(previousState.observedMoves);
+    setWinner(null); 
+    setHistory(prev => prev.slice(0, -1));
+  };
+
+  const saveHistory = () => {
+    setHistory(prev => {
+        const newHist = [...prev, {
+            board: cloneBoard(board),
+            turn,
+            eliminated: { 0: [...eliminated[0]], 1: [...eliminated[1]] },
+            lastMove,
+            cpuLastMoveInfo,
+            observedMoves: {...observedMoves}
+        }];
+        if (newHist.length > 50) newHist.shift(); 
+        return newHist;
+    });
+  };
+
+  const handleSetupClick = (r, c) => {
+    if (r < ROWS - 2) return; 
+    if (selectedPos) {
+      const newBoard = cloneBoard(board);
+      const pieceA = newBoard[selectedPos.r][selectedPos.c];
+      const pieceB = newBoard[r][c];
+      newBoard[selectedPos.r][selectedPos.c] = pieceB;
+      newBoard[r][c] = pieceA;
+      setBoard(newBoard);
+      setSelectedPos(null);
+      playSound('MOVE');
+    } else {
+      setSelectedPos({ r, c });
+    }
+  };
+
+  const startGame = () => {
+    const startingTurn = Math.random() < 0.5 ? 0 : 1;
+    setTurn(startingTurn);
+    setPhase('playing');
+    setSelectedPos(null);
+    setValidMoves([]);
+    setHistory([]); 
+  };
+
+  const initiateMove = (fromR, fromC, toR, toC) => {
+    const piece = board[fromR][fromC];
+    
+    if (turn === 0) {
+        saveHistory();
+    } else {
+        setCpuLastMoveInfo({ pieceId: piece.id, fromR: fromR, fromC: fromC });
+    }
+
+    setAnimatingMove({ piece: piece, fromR, fromC, toR, toC });
+    playSound('MOVE');
+
+    setTimeout(() => {
+      finalizeMove(fromR, fromC, toR, toC);
+      setAnimatingMove(null);
+    }, 500);
+  };
+
+  const finalizeMove = (fromR, fromC, toR, toC) => {
+    const newBoard = cloneBoard(board);
+    const attacker = newBoard[fromR][fromC];
+    const target = newBoard[toR][toC];
+    const currentPlayer = attacker.player;
+    
+    setLastMove({ fromR, fromC, toR, toC, player: currentPlayer });
+
+    // DEDUCCIÓ DE LA CPU (Observar moviments del rival)
+    if (attacker.player === 0) { 
+        const dr = Math.abs(toR - fromR);
+        const dc = Math.abs(toC - fromC);
+        
+        let moveUpdates = [];
+
+        if (dr > 1 || dc > 1) moveUpdates.push('soldier');
+        
+        if (dr > 0 && dc > 0) moveUpdates.push('diag');
+        else if (dr > 0 || dc > 0) moveUpdates.push('ortho');
+
+        if (target) moveUpdates.push('captured');
+
+        if (moveUpdates.length > 0) {
+            setObservedMoves(prev => {
+                const current = prev[attacker.id] || [];
+                if (current.includes('soldier')) {
+                    if (moveUpdates.includes('captured') && !current.includes('captured')) {
+                        return { ...prev, [attacker.id]: [...current, 'captured'] };
+                    }
+                    return prev; 
+                }
+
+                const currentSet = new Set(current);
+                moveUpdates.forEach(tag => currentSet.add(tag));
+                return { ...prev, [attacker.id]: Array.from(currentSet) };
+            });
+        }
+    }
+
+    let isGameOver = false;
+    let finalWinner = null;
+    let reason = "";
+    
+    const nextEliminated = { 0: [...eliminated[0]], 1: [...eliminated[1]] };
+
+    newBoard[fromR][fromC] = null; 
+
+    if (target) {
+      if (target.type.id === 'LADY') {
+        newBoard[toR][toC] = null; 
+        nextEliminated[target.player].push(target);
+        nextEliminated[attacker.player].push(attacker);
+        if (attacker.type.id === 'CANDIDATE') {
+          isGameOver = true;
+          finalWinner = (currentPlayer === 0 ? 1 : 0);
+          reason = "Candidat eliminat per una Dama!";
+        }
+        playSound('CAPTURE'); 
+      } else {
+        nextEliminated[target.player].push(target);
+        newBoard[toR][toC] = attacker;
+        if (target.type.id === 'CANDIDATE') {
+          isGameOver = true;
+          finalWinner = currentPlayer;
+          let killerName = attacker.type.name;
+          let article = "un";
+          if (attacker.type.id === 'CANDIDATE') { article = "l'altre"; killerName = "Candidat"; }
+          else if (attacker.type.id === 'SOLDIER') { article = "un"; killerName = "Soldat"; }
+          else if (attacker.type.id === 'NOBLE') { article = "un"; killerName = "Noble"; }
+          else if (attacker.type.id === 'COUNSELOR') { article = "un"; killerName = "Conseller"; }
+          reason = `Candidat capturat per ${article} ${killerName}!`;
+        }
+        playSound('CAPTURE');
+      }
+    } else {
+      newBoard[toR][toC] = attacker;
+    }
+
+    setEliminated(nextEliminated);
+
+    if (!isGameOver) {
+      const goalRow = currentPlayer === 0 ? 0 : ROWS - 1;
+      const myCandidate = newBoard[goalRow].find(p => p && p.player === currentPlayer && p.type.id === 'CANDIDATE');
+      if (myCandidate) {
+        isGameOver = true;
+        finalWinner = currentPlayer;
+        reason = "Candidat ha arribat al Palau!";
+      }
+      const cpuLadiesLost = nextEliminated[1].filter(p => p.type.id === 'LADY').length;
+      if (cpuLadiesLost >= 2) {
+        isGameOver = true;
+        finalWinner = 1;
+        reason = "La CPU ha sacrificat les seves Dames i guanya!";
+      }
+      const playerLadiesLost = nextEliminated[0].filter(p => p.type.id === 'LADY').length;
+      if (playerLadiesLost >= 2) {
+        isGameOver = true;
+        finalWinner = 0;
+        reason = "Has sacrificat les teves Dames i guanyes!";
+      }
+    }
+
+    if (isGameOver) {
+      setWinner(finalWinner);
+      setWinReason(reason);
+      
+      const newScores = { ...scores };
+      if (finalWinner === 0) newScores.player += 1;
+      else newScores.cpu += 1;
+      setScores(newScores);
+
+      const revealedBoard = newBoard.map(row => row.map(cell => cell ? { ...cell, revealed: true } : null));
+      setBoard(revealedBoard);
+
+      if (finalWinner === 0) playSound('WIN'); else playSound('LOSE');
+
+      if (newScores.player >= WINS_TO_MATCH || newScores.cpu >= WINS_TO_MATCH) {
+          setPhase('matchover');
+      } else {
+          setPhase('gameover');
+      }
+    } else {
+      setBoard(newBoard);
+      setTurn(currentPlayer === 0 ? 1 : 0);
+    }
+  };
+
+  // --- DRAG AND DROP HANDLERS ---
+  const handleDragStart = (e, r, c) => {
+    if (phase !== 'playing' || turn !== 0) return;
+    const piece = board[r][c];
+    if (!piece || piece.player !== 0) return;
+
+    handleCellClick(r, c);
+    
+    e.dataTransfer.setData("application/json", JSON.stringify({ r, c }));
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault(); 
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDrop = (e, r, c) => {
+    e.preventDefault();
+    if (phase !== 'playing' || turn !== 0) return;
+
+    const dataString = e.dataTransfer.getData("application/json");
+    if (!dataString) return; 
+
+    try {
+        const data = JSON.parse(dataString);
+        const fromR = data.r;
+        const fromC = data.c;
+
+        const isValid = validMoves.some(m => m.r === r && m.c === c);
+        
+        if (isValid) {
+            initiateMove(fromR, fromC, r, c);
+            setSelectedPos(null);
+            setValidMoves([]);
+        }
+    } catch (err) {
+        console.error("Drop error", err);
+    }
+  };
+
+  const handleCellClick = (r, c) => {
+    if (animatingMove) return;
+    if (phase !== 'playing') {
+        if (phase === 'setup') handleSetupClick(r, c);
+        return;
+    }
+    if (turn !== 0) return; 
+    const clickedPiece = board[r][c];
+    if (clickedPiece && clickedPiece.player === 0) {
+      setSelectedPos({ r, c });
+      setValidMoves(getValidMoves(board, r, c, clickedPiece));
+      return;
+    }
+    if (selectedPos) {
+      const move = validMoves.find(m => m.r === r && m.c === c);
+      if (move) {
+        initiateMove(selectedPos.r, selectedPos.c, r, c);
+        setSelectedPos(null);
+        setValidMoves([]);
+      } else {
+        setSelectedPos(null);
+        setValidMoves([]);
+      }
+    }
+  };
+
+  // --- IA ESTRATÈGICA (FINAL) ---
+  useEffect(() => {
+    if (turn === 1 && phase === 'playing' && !animatingMove) {
+      const timer = setTimeout(() => cpuTurn(), 800);
+      return () => clearTimeout(timer);
+    }
+  }, [turn, phase, animatingMove]); 
+
+  const cpuTurn = () => {
+    let myPieces = [], enemyPieces = [];
+    board.forEach((row, r) => {
+      row.forEach((cell, c) => {
+        if (cell) {
+            if (cell.player === 1) myPieces.push({ r, c, piece: cell });
+            else enemyPieces.push({ r, c, piece: cell });
+        }
+      });
+    });
+
+    const myKing = myPieces.find(p => p.piece.type.id === 'CANDIDATE');
+    const cpuLadiesLost = eliminated[1].filter(p => p.type.id === 'LADY').length;
+    const playerLadiesCaptured = eliminated[0].filter(p => p.type.id === 'LADY').length;
+
+    const activeSuspects = enemyPieces.filter(ep => {
+        const hist = observedMoves[ep.piece.id] || [];
+        return hist.includes('ortho') && hist.includes('diag');
+    });
+
+    let allMoves = [];
+    myPieces.forEach(({ r, c, piece }) => {
+      const moves = getValidMoves(board, r, c, piece);
+      moves.forEach(m => {
+        allMoves.push({ from: {r, c}, to: m, piece });
+      });
+    });
+
+    if (allMoves.length === 0) { setTurn(0); return; }
+
+    let bestMove = null;
+    let maxScore = -Infinity;
+
+    allMoves.forEach(move => {
+      let score = 0;
+      const target = board[move.to.r][move.to.c];
+      const isCandidate = move.piece.type.id === 'CANDIDATE';
+      const isLady = move.piece.type.id === 'LADY';
+
+      if (isCandidate && move.to.r === ROWS - 1) score += 999999;
+      if (target && target.type.id === 'CANDIDATE') score += 999999;
+      if (cpuLastMoveInfo && move.piece.id === cpuLastMoveInfo.pieceId) {
+          score -= 200; 
+          if (move.to.r === cpuLastMoveInfo.fromR && move.to.c === cpuLastMoveInfo.fromC) score -= 10000;
+      }
+
+      if (cpuStrategy === 'CORONATION' && isCandidate) score += 150; 
+      if (cpuStrategy === 'CAPTURE' && target) score += 100; 
+      if (cpuStrategy === 'SACRIFICE' && isLady) score += 50; 
+
+      if (isLady) {
+        let isCurrentlyAdjacent = false;
+        enemyPieces.forEach(ep => {
+            const dr = Math.abs(ep.r - move.from.r);
+            const dc = Math.abs(ep.c - move.from.c);
+            if (dr <= 1 && dc <= 1) isCurrentlyAdjacent = true;
+        });
+        if (isCurrentlyAdjacent) score -= 500; 
+        if (myKing) {
+             const dr = Math.abs(move.to.r - myKing.r);
+             const dc = Math.abs(move.to.c - myKing.c);
+             if (move.to.r > myKing.r && Math.abs(move.to.c - myKing.c) <= 1 && move.to.r <= myKing.r + 2) score += 80; 
+             else if (dr <= 1 && dc <= 1) score += 50; 
+        }
+        if (cpuLadiesLost === 1 || cpuStrategy === 'SACRIFICE') {
+            let futureAdjacency = 0;
+            enemyPieces.forEach(ep => {
+                const dr = Math.abs(ep.r - move.to.r);
+                const dc = Math.abs(ep.c - move.to.c);
+                if (dr <= 1 && dc <= 1) futureAdjacency++;
+            });
+            if (futureAdjacency > 0) score += 200; else score -= 50;
+        } else { score -= 20; }
+      }
+
+      if (isCandidate) {
+        let nearEnemy = false;
+        enemyPieces.forEach(ep => {
+            const dr = Math.abs(ep.r - move.to.r);
+            const dc = Math.abs(ep.c - move.to.c);
+            if (dr <= 1 && dc <= 1) nearEnemy = true;
+        });
+        if (nearEnemy) score -= 10000; 
+        else {
+            if (move.to.r < move.from.r) score -= 1000; 
+            const aggressiveBonus = move.to.r > 3 ? 120 : 10;
+            score += move.to.r * aggressiveBonus; 
+            let alliesCount = 0;
+            myPieces.forEach(mp => {
+                if (mp.piece !== move.piece) { 
+                    const adr = Math.abs(mp.r - move.to.r);
+                    const adc = Math.abs(mp.c - move.to.c);
+                    if (adr <= 1 && adc <= 1) alliesCount++;
+                }
+            });
+            score += alliesCount * 30;
+        }
+      } 
+      else if (!isLady) {
+        if (myKing) {
+            if (target && Math.abs(target.c - myKing.c) <= 1 && target.r > myKing.r) score += 300; 
+             if (move.to.r === myKing.r + 1 && Math.abs(move.to.c - myKing.c) <= 1) score += 50; 
+        }
+        score += move.to.r * 25; 
+        if (move.to.c >= 1 && move.to.c <= 3) score += 15;
+      }
+
+      if (target) {
+        const history = observedMoves[target.id] || [];
+        const isSoldier = history.includes('soldier');
+        const hasCaptured = history.includes('captured');
+        const isSuspect = history.includes('ortho') && history.includes('diag');
+
+        const riskTolerance = cpuStrategy === 'CAPTURE' ? 1000 : 5000;
+
+        if (playerLadiesCaptured === 1) {
+            if (isSoldier) score += 200; 
+            else if (isSuspect) {
+                if (target.r <= 1) score += 500; 
+                else score -= 5000; 
+            } else { score -= 100; }
+        } else { score += 200; }
+      }
+
+      if (!target && playerLadiesCaptured === 1) {
+          const blockingSuspect = enemyPieces.find(ep => {
+              const hist = observedMoves[ep.piece.id] || [];
+              const isSusp = hist.includes('ortho') && hist.includes('diag');
+              return isSusp && Math.abs(ep.r - move.to.r) <= 1 && Math.abs(ep.c - move.to.c) <= 1;
+          });
+          if (blockingSuspect) score += 150; 
+      }
+      score += Math.random() * 15; 
+      if (score > maxScore) { maxScore = score; bestMove = move; }
+    });
+
+    if (bestMove) {
+      initiateMove(bestMove.from.r, bestMove.from.c, bestMove.to.r, bestMove.to.c);
+    }
+  };
+
+  const getCellClass = (r, c) => {
+    let base = "w-full aspect-square border border-slate-700 flex items-center justify-center relative ";
+    const isDark = (r + c) % 2 === 1;
+    if (r === 0) base += isDark ? "bg-orange-800 " : "bg-orange-600 ";
+    else if (r === ROWS - 1) base += isDark ? "bg-emerald-800 " : "bg-emerald-600 ";
+    else base += isDark ? "bg-slate-800 " : "bg-slate-700 ";
+
+    if (lastMove && lastMove.toR === r && lastMove.toC === c && !board[r][c]) {
+        const ringColor = lastMove.player === 0 ? 'ring-emerald-500' : 'ring-orange-500';
+        base += `ring-4 ${ringColor} z-0 `;
+    }
+
+    if (animatingMove && animatingMove.fromR === r && animatingMove.fromC === c) {
+        // Amagar origen durant animació
+    }
+
+    if (phase === 'playing' && selectedPos) {
+      const isSelected = selectedPos.r === r && selectedPos.c === c;
+      const isValid = validMoves.some(m => m.r === r && m.c === c);
+      const isCapture = validMoves.some(m => m.r === r && m.c === c && m.isCapture);
+      if (isSelected) base += "ring-4 ring-blue-500 z-10 ";
+      else if (isCapture) base += "bg-red-900/50 ring-4 ring-red-500 cursor-pointer ";
+      else if (isValid) base += "bg-green-900/50 ring-4 ring-green-500 cursor-pointer ";
+    } else if (phase === 'setup' && r >= ROWS - 2) {
+      base += "cursor-pointer hover:bg-slate-600 border-dashed border-slate-500 ";
+      if (selectedPos && selectedPos.r === r && selectedPos.c === c) base += "ring-2 ring-yellow-400 ";
+    }
+    return base;
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-2 font-sans overflow-hidden select-none">
+      {phase === 'name' && <NameInputModal onStart={handleNameSubmit} />}
+      {showRules && <InstructionsModal onClose={() => setShowRules(false)} />}
+
+      <div className="w-full max-w-4xl flex flex-col gap-2 mb-4">
+        <div className="flex justify-between items-center">
+            <h1 className="text-2xl font-bold flex items-center gap-2 text-orange-500">
+                <Crown className="w-6 h-6" /> VOLTO DIGITAL
+            </h1>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setSoundEnabled(!soundEnabled)} className="p-2 bg-slate-800 rounded hover:bg-slate-700 text-slate-400" title="So">
+                {soundEnabled ? <Volume2 size={20}/> : <VolumeX size={20}/>}
+              </button>
+              
+              <button 
+                onClick={handleUndo} 
+                disabled={phase !== 'playing' || turn === 1 || history.length === 0}
+                className="p-2 bg-slate-800 rounded hover:bg-slate-700 text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed" 
+                title="Desfer"
+              >
+                <RotateCcw size={20}/>
+              </button>
+
+              <button onClick={() => setShowRules(true)} className="p-2 bg-slate-800 rounded hover:bg-slate-700 text-amber-400" title="Instruccions"><HelpCircle size={20} /></button>
+              <div className="text-sm px-3 py-1 bg-slate-800 rounded text-slate-300">
+                  {phase === 'setup' ? 'Fase de Preparació' : (turn === 0 ? `Torn: ${playerName}` : 'Torn: CPU')}
+              </div>
+            </div>
+        </div>
+        
+        <div className="grid grid-cols-2 gap-4">
+            <div className="bg-slate-900 border border-slate-800 p-2 rounded flex items-center justify-between">
+                <span className="text-xs text-slate-400 uppercase">Les teves Dames</span>
+                <div className="flex gap-1">
+                   {[...Array(2)].map((_, i) => <Heart key={i} size={16} className={i < p0LadiesLost ? "text-red-500 fill-red-500" : "text-slate-700"} />)}
+                </div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 p-2 rounded flex items-center justify-between">
+                <span className="text-xs text-slate-400 uppercase">Dames CPU</span>
+                <div className="flex gap-1">
+                   {[...Array(2)].map((_, i) => <Heart key={i} size={16} className={i < p1LadiesLost ? "text-red-500 fill-red-500" : "text-slate-700"} />)}
+                </div>
+            </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col lg:flex-row gap-6 w-full max-w-5xl justify-center items-start">
+        <div className="relative mx-auto select-none w-full max-w-[500px]">
+            <div 
+                className="grid gap-0.5 bg-slate-900 p-1 rounded border-4 border-slate-800 shadow-2xl relative" 
+                style={{ gridTemplateColumns: `repeat(${COLS}, minmax(0, 1fr))` }}
+            >
+                {animatingMove && (
+                  <div 
+                    className="absolute z-20 pointer-events-none transition-all duration-500 ease-in-out"
+                    style={{
+                      width: `calc(100% / ${COLS})`,
+                      height: `calc(100% / ${ROWS})`,
+                      top: `calc(${animatingMove.fromR} * 100% / ${ROWS})`,
+                      left: `calc(${animatingMove.fromC} * 100% / ${COLS})`,
+                      transform: `translate(
+                        calc(${animatingMove.toC - animatingMove.fromC} * 100%), 
+                        calc(${animatingMove.toR - animatingMove.fromR} * 100%)
+                      )`
+                    }}
+                  >
+                     <div className={`
+                        w-full h-full flex items-center justify-center p-1
+                     `}>
+                        <div className={`
+                            flex items-center justify-center w-[85%] h-[85%] rounded shadow-2xl relative
+                            ${animatingMove.piece.player === 0 
+                                ? 'bg-amber-100 text-amber-900 border border-amber-400' 
+                                : 'bg-rose-200 text-rose-900 border border-rose-400'
+                            }
+                        `}>
+                             {(animatingMove.piece.player === 0 || animatingMove.piece.revealed) ? (
+                                <>
+                                  <MovementDots type={animatingMove.piece.type} colorClass={PIECE_COLORS[animatingMove.piece.type.id]} player={animatingMove.piece.player} />
+                                  <animatingMove.piece.type.icon 
+                                    size={32} 
+                                    strokeWidth={2} 
+                                    className={`${PIECE_COLORS[animatingMove.piece.type.id]} relative z-10 ${animatingMove.piece.type.id === 'SOLDIER' && animatingMove.piece.player === 1 ? 'rotate-180' : ''}`} 
+                                  />
+                                </>
+                             ) : (
+                                <div className="w-full h-full bg-rose-300 rounded flex items-center justify-center"><span className="text-3xl font-bold text-rose-500">?</span></div>)}
+                        </div>
+                     </div>
+                  </div>
+                )}
+                {board.map((row, r) => row.map((cell, c) => (
+                    <div 
+                        key={`${r}-${c}`} 
+                        className={getCellClass(r, c)} 
+                        style={(r === 0 || r === ROWS - 1) ? PALACE_PATTERN : {}}
+                        onClick={() => handleCellClick(r, c)}
+                        onDragOver={handleDragOver}
+                        onDrop={(e) => handleDrop(e, r, c)}
+                    >
+                        {lastMove && lastMove.fromR === r && lastMove.fromC === c && <div className={`absolute w-2 h-2 rounded-full border-2 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 ${lastMove.player === 0 ? 'border-emerald-500' : 'border-orange-500'}`}></div>}
+                        
+                        {cell && !(animatingMove && animatingMove.fromR === r && animatingMove.fromC === c) && (
+                            <div 
+                                className={`flex items-center justify-center w-[85%] h-[85%] rounded shadow-md transition-all duration-300 relative ${cell.player === 0 ? 'bg-amber-100 text-amber-900 border border-amber-400 shadow-[0_4px_0_#b45309] cursor-grab active:cursor-grabbing' : 'bg-rose-200 text-rose-900 border border-rose-400 shadow-[0_4px_0_#e11d48]'} ${cell.revealed || cell.player === 0 ? '' : ''} ${selectedPos?.r === r && selectedPos?.c === c ? '-translate-y-1 shadow-[0_8px_0_#b45309]' : ''} ${lastMove && lastMove.toR === r && lastMove.toC === c ? (lastMove.player === 0 ? 'ring-4 ring-emerald-500 ring-offset-2 ring-offset-slate-900' : 'ring-4 ring-orange-500 ring-offset-2 ring-offset-slate-900') : ''}`}
+                                draggable={phase === 'playing' && cell.player === 0}
+                                onDragStart={(e) => handleDragStart(e, r, c)}
+                            >
+                                {(cell.player === 0 || cell.revealed) ? (<><MovementDots type={cell.type} colorClass={PIECE_COLORS[cell.type.id]} player={cell.player} /><cell.type.icon size={32} strokeWidth={2} className={`${PIECE_COLORS[cell.type.id]} relative z-10 ${cell.type.id === 'SOLDIER' && cell.player === 1 ? 'rotate-180' : ''}`} /></>) : (
+                                <div className="w-full h-full bg-rose-300 rounded flex items-center justify-center"><span className="text-3xl font-bold text-rose-500">?</span></div>)}
+                            </div>
+                        )}
+                    </div>
+                )))}
+            </div>
+        </div>
+
+        <div className="w-full lg:w-72 flex flex-col gap-3">
+            <Graveyard pieces={eliminated[0]} label="Les teves baixes (Jugador)" />
+            <Graveyard pieces={eliminated[1]} label="Baixes Enemic (CPU)" />
+            
+            <Scoreboard scores={scores} playerName={playerName} />
+
+            {phase === 'setup' && (
+                <div className="bg-slate-800 p-4 rounded border border-slate-700 shadow-lg mt-2">
+                    <h3 className="font-bold text-amber-400 mb-2 text-sm flex items-center gap-2"><User size={16}/> PREPARACIÓ</h3>
+                    <p className="text-xs text-slate-400 mb-4">Les teves peces s'han col·locat aleatòriament. Pots moure-les o començar.<br/>Si perds les 2 Dames, GUANYES.</p>
+                    <button onClick={() => startNewRound()} className="w-full mb-2 py-1 border border-slate-600 rounded text-slate-300 text-xs hover:bg-slate-700">Rebarrejar</button>
+                    <button onClick={startGame} className="w-full py-2 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded text-sm">LLUITA!</button>
+                </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-2 text-xs text-slate-400 bg-slate-900 p-3 rounded mt-auto">
+                <div className="font-bold text-slate-200 mb-1 border-b border-slate-800 pb-1">Moviments</div>
+                {Object.values(TYPES).map(t => (
+                    <div key={t.id} className="flex items-center justify-between">
+                        <span className="flex items-center gap-1"><t.icon size={12} className={PIECE_COLORS[t.id]}/> {t.name}</span>
+                        <span className="text-[10px] text-slate-500 truncate max-w-[100px]">{t.id==='LADY' ? '1 pas (No mata)' : t.id==='SOLDIER' ? 'Endavant fins topar' : '1 pas'}</span>
+                    </div>
+                ))}
+            </div>
+
+            {(phase === 'gameover' || phase === 'matchover') && (
+                <div className="bg-slate-900 border-2 border-slate-700 p-4 rounded-lg text-center animate-in fade-in mt-auto">
+                    {phase === 'matchover' ? (
+                        <>
+                            <h2 className={`text-xl font-bold mb-2 ${winner === 0 ? 'text-green-400' : 'text-red-500'}`}>
+                                {winner === 0 ? `${playerName} GUANYA EL PARTIT!` : 'LA CPU GUANYA EL PARTIT!'}
+                            </h2>
+                            <button onClick={resetApp} className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded flex justify-center items-center gap-2">
+                                <LogOut size={18}/> Reiniciar Tot
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            <h2 className={`text-xl font-bold mb-2 ${winner === 0 ? 'text-green-400' : 'text-red-500'}`}>
+                                {winner === 0 ? 'VICTÒRIA DE RONDA!' : 'DERROTA DE RONDA'}
+                            </h2>
+                            <p className="mb-4 text-xs text-slate-300">{winReason}</p>
+                            <div className="flex flex-col gap-2">
+                                <button onClick={startNewRound} className="w-full px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded flex justify-center items-center gap-2">
+                                    <RefreshCcw size={18}/> Nova Ronda
+                                </button>
+                                <button onClick={resetApp} className="w-full px-4 py-2 border border-slate-600 hover:bg-slate-700 text-slate-300 font-bold rounded flex justify-center items-center gap-2">
+                                    <LogOut size={18}/> Reiniciar Match
+                                </button>
+                            </div>
+                        </>
+                    )}
+                </div>
+            )}
+        </div>
+      </div>
+    </div>
+  );
+}
