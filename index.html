@@ -83,7 +83,7 @@
 
         // --- ESTAT GLOBAL ---
         const state = {
-            board: [], // S'inicialitza com a array buit
+            board: [], 
             phase: 'name', 
             turn: 0,
             selectedPos: null,
@@ -118,6 +118,10 @@
         const getValidMoves = (board, r, c, piece) => {
             const moves = [];
             if (!piece) return moves;
+
+            // Ens assegurem que r i c siguin números
+            r = Number(r);
+            c = Number(c);
 
             const isPlayer1 = piece.player === 0; 
             const forwardDir = isPlayer1 ? -1 : 1; 
@@ -291,6 +295,8 @@
         }
 
         function handleSetupClick(r, c) {
+            r = parseInt(r);
+            c = parseInt(c);
             if (r < ROWS - 2) return;
             if (state.selectedPos) {
                 const newBoard = cloneBoard(state.board);
@@ -310,13 +316,17 @@
 
         function handleCellClick(r, c) {
             if (state.animatingMove) return;
+            // Ens assegurem que r i c siguin números per evitar errors de tipus
+            r = parseInt(r);
+            c = parseInt(c);
+            
             if (state.phase !== 'playing') {
                 if (state.phase === 'setup') handleSetupClick(r, c);
                 return;
             }
             if (state.turn !== 0) return;
 
-            const clickedPiece = state.board[r] ? state.board[r][c] : null;
+            const clickedPiece = (state.board[r] && state.board[r][c]) ? state.board[r][c] : null;
             if (clickedPiece && clickedPiece.player === 0) {
                 state.selectedPos = { r, c };
                 state.validMoves = getValidMoves(state.board, r, c, clickedPiece);
@@ -338,6 +348,11 @@
         }
 
         function initiateMove(fromR, fromC, toR, toC) {
+            fromR = parseInt(fromR);
+            fromC = parseInt(fromC);
+            toR = parseInt(toR);
+            toC = parseInt(toC);
+
             const piece = state.board[fromR][fromC];
 
             if (state.turn === 0) {
@@ -362,6 +377,11 @@
         }
 
         function finalizeMove(fromR, fromC, toR, toC) {
+            fromR = parseInt(fromR);
+            fromC = parseInt(fromC);
+            toR = parseInt(toR);
+            toC = parseInt(toC);
+
             const newBoard = cloneBoard(state.board);
             const attacker = newBoard[fromR][fromC];
             const target = newBoard[toR][toC];
@@ -566,7 +586,12 @@
 
         function handleDragStart(e, r, c) {
             if (state.phase !== 'playing' || state.turn !== 0) return;
-            const piece = state.board[r] ? state.board[r][c] : null;
+            // Ens assegurem de rebre números
+            if (r === null || c === null) return;
+            r = parseInt(r);
+            c = parseInt(c);
+
+            const piece = (state.board[r] && state.board[r][c]) ? state.board[r][c] : null;
             if (!piece || piece.player !== 0) return;
 
             draggedData = { r, c };
@@ -582,10 +607,13 @@
         function handleDrop(e, r, c) {
             e.preventDefault();
             if (state.phase !== 'playing' || state.turn !== 0 || !draggedData) return;
+            
+            r = parseInt(r);
+            c = parseInt(c);
 
-            const fromR = draggedData.r;
-            const fromC = draggedData.c;
-            const isValid = state.validMoves.some(m => m.r === r && m.c === c);
+            const fromR = parseInt(draggedData.r);
+            const fromC = parseInt(draggedData.c);
+            const isValid = state.validMoves.some(m => parseInt(m.r) === r && parseInt(m.c) === c);
 
             if (isValid) {
                 initiateMove(fromR, fromC, r, c);
@@ -650,6 +678,7 @@
             const cursorClass = (state.phase === 'playing' && piece.player === 0) ? 'cursor-grab active:cursor-grabbing' : '';
             const dragAttr = (state.phase === 'playing' && piece.player === 0) ? 'draggable="true"' : '';
             
+            // Passem les coordenades mitjançant dataset
             return `
                 <div 
                     class="flex items-center justify-center w-[85%] h-[85%] rounded shadow-md transition-all duration-300 relative ${boxClass} ${cursorClass}"
@@ -696,7 +725,6 @@
                     let ringClass = "";
                     let zIndex = "z-0";
 
-                    // FIX: Comprovació de seguretat per evitar TypeError quan state.board està buit
                     const pieceAtCell = (state.board[r] && state.board[r][c]) ? state.board[r][c] : null;
 
                     if (state.lastMove && state.lastMove.toR === r && state.lastMove.toC === c && !pieceAtCell) {
